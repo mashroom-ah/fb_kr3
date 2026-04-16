@@ -1,14 +1,16 @@
 /**
- * Service Worker (Практики 13–16)
- * Объединённая версия с улучшенным кэшированием и поддержкой Push
+ * Service Worker (Практики 13-17)
+ * 
+ * Включает:
+ * - Кэширование App Shell
+ * - Push уведомления
+ * - Обработку кнопки "Отложить на 5 минут"
  */
 
-const CACHE_NAME = 'pwa-combined-v2';
-const SHELL_CACHE = 'pwa-shell-v1';
-const RUNTIME_CACHE = 'pwa-runtime-v1';
+const CACHE_NAME = 'pr17-cache-v3';
 
-// Основные ресурсы для предварительного кэширования
-const SHELL_ASSETS = [
+// App Shell: минимум файлов для офлайн-работы
+const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/styles.css',
@@ -33,161 +35,124 @@ const CONTENT_PAGES = [
   '/content/push.html'
 ];
 
+// =====================================================
+// INSTALL
+// =====================================================
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
-      const cache = await caches.open(SHELL_CACHE);
-      await cache.addAll(SHELL_ASSETS);
+      const cache = await caches.open(CACHE_NAME);
+      await cache.addAll(ASSETS_TO_CACHE);
       await cache.addAll(CONTENT_PAGES);
     })()
   );
   self.skipWaiting();
 });
 
+// =====================================================
+// ACTIVATE
+// =====================================================
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    (async () => {
-      const keys = await caches.keys();
-      await Promise.all(
-        keys
-          .filter((k) => ![SHELL_CACHE, RUNTIME_CACHE].includes(k))
-          .map((k) => caches.delete(k))
-      );
-      self.clients.claim();
-    })()
+    caches.keys().then((keys) =>
+      Promise.all(keys.map((k) => (k === CACHE_NAME ? null : caches.delete(k))))
+    )
+  );
+  self.clients.claim();
+});
+
+// =====================================================
+// FETCH
+// =====================================================
+
+self.addEventListener('fetch', (event) => {
+  event.respondWith(
+    caches.match(event.request).then((cached) => cached || fetch(event.request))
   );
 });
 
-// =========================================================
-// Стратегии кэширования
-// =========================================================
-
-async function networkFirst(request) {
-  const cache = await caches.open(RUNTIME_CACHE);
-  try {
-    const response = await fetch(request);
-    if (response && response.status === 200) {
-      cache.put(request, response.clone());
-    }
-    return response;
-  } catch (error) {
-    const cached = await cache.match(request);
-    if (cached) return cached;
-    const shellCached = await caches.match(request);
-    if (shellCached) return shellCached;
-    return new Response('Офлайн: ресурс недоступен', {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-    });
-  }
-}
-
-async function staleWhileRevalidate(request) {
-  const cache = await caches.open(RUNTIME_CACHE);
-  const cachedResponse = await cache.match(request);
-  
-  const fetchPromise = fetch(request).then(async (response) => {
-    if (response && response.status === 200) {
-      cache.put(request, response.clone());
-    }
-    return response;
-  }).catch(() => {});
-  
-  return cachedResponse || fetchPromise;
-}
-
-async function cacheFirst(request) {
-  const cached = await caches.match(request);
-  if (cached) return cached;
-  
-  try {
-    const response = await fetch(request);
-    if (response && response.status === 200) {
-      const cache = await caches.open(RUNTIME_CACHE);
-      cache.put(request, response.clone());
-    }
-    return response;
-  } catch (error) {
-    return new Response('Офлайн: ресурс недоступен', {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-    });
-  }
-}
-
-// =========================================================
-// Fetch handler
-// =========================================================
-
-self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  const url = new URL(event.request.url);
-
-  // HTML страницы (навигация): Network First
-  if (event.request.mode === 'navigate') {
-    event.respondWith(networkFirst(event.request));
-    return;
-  }
-
-  // Контентные страницы App Shell: Network First
-  if (url.pathname.startsWith('/content/')) {
-    event.respondWith(networkFirst(event.request));
-    return;
-  }
-
-  // CSS и JS: Stale While Revalidate
-  if (event.request.destination === 'style' || event.request.destination === 'script') {
-    event.respondWith(staleWhileRevalidate(event.request));
-    return;
-  }
-
-  // Остальные ресурсы: Cache First
-  event.respondWith(cacheFirst(event.request));
-});
-
-// =========================================================
-// Push API (Практика 16)
-// =========================================================
+// =====================================================
+// PUSH (Практика 16-17)
+// =====================================================
 
 self.addEventListener('push', (event) => {
-  let data = {};
-  try {
-    if (event.data) {
-      data = JSON.parse(event.data.text());
-    }
-  } catch (error) {
-    console.error('[SW] Push parse error:', error);
+  const data = event.data ? event.data.json() : {};
+  
+  const title = data.title || 'Напоминание';
+  const body = data.body || 'У вас новое уведомление';
+  const reminderId = data.reminderId || null;
+  
+  // Добавляем кнопку "Отложить" только если есть reminderId
+  const actions = [];
+  if (reminderId) {
+    actions.push({ action: 'snooze_5m', title: '⏰ Отложить на 5 минут' });
   }
-
-  const title = data.title || '📋 Планировщик задач';
+  
   const options = {
-    body: data.body || 'У вас есть обновления в списке задач!',
-    icon: '/assets/icons/favicon-192x192.png',
-    badge: '/assets/icons/favicon-96x96.png',
+    body,
     data: {
-      url: data.url || '/'
+      url: data.url || '/',
+      reminderId,
     },
-    vibrate: [200, 100, 200]
+    actions,
+    icon: '/assets/icons/favicon-128x128.png',
+    badge: '/assets/icons/favicon-48x48.png',
+    vibrate: [200, 100, 200],
+    requireInteraction: true  // Уведомление не исчезает автоматически
   };
-
+  
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
+// =====================================================
+// NOTIFICATION CLICK (Практика 16-17)
+// =====================================================
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification?.data?.url || '/';
-
+  
+  const { url, reminderId } = event.notification.data || {};
+  
+  // ПР17: Обработка кнопки "Отложить на 5 минут"
+  if (event.action === 'snooze_5m' && reminderId) {
+    console.log('[SW] Snooze clicked for reminder:', reminderId);
+    
+    event.waitUntil(
+      fetch('/api/reminders/snooze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reminderId, minutes: 5 }),
+      })
+      .then(response => {
+        if (response.ok) {
+          console.log('[SW] Reminder rescheduled successfully');
+          // Показываем подтверждение
+          return self.registration.showNotification('Напоминание отложено', {
+            body: 'Новое уведомление придёт через 5 минут',
+            icon: '/assets/icons/favicon-128x128.png',
+          });
+        }
+      })
+      .catch(error => {
+        console.error('[SW] Snooze request failed:', error);
+      })
+    );
+    return;
+  }
+  
+  // Обычный клик по уведомлению — открываем приложение
   event.waitUntil(
-    (async () => {
-      const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const client of allClients) {
-        if (client.url.includes(url) && 'focus' in client) {
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes(url || '/') && 'focus' in client) {
           return client.focus();
         }
       }
       if (clients.openWindow) {
-        return clients.openWindow(url);
+        return clients.openWindow(url || '/');
       }
-    })()
+    })
   );
 });

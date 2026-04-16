@@ -1,128 +1,161 @@
 <!DOCTYPE html>
 <html lang="ru">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="manifest" href="./manifest.json" />
-    <meta name="theme-color" content="#0b1220" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="Мой планировщик" />
-    <!-- VAPID публичный ключ (будет заменён при сборке) -->
-    <meta name="vapid-public-key" content="ВАШ_VAPID_PUBLIC_KEY" />
-    <link rel="icon" type="image/x-icon" href="./assets/icons/favicon.ico" />
-    <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16x16.png" />
-    <link rel="icon" type="image/png" sizes="32x32" href="./assets/icons/favicon-32x32.png" />
-    <link rel="apple-touch-icon" href="./assets/icons/apple-touch-icon.png" />
-    <link rel="stylesheet" href="./styles.css" />
-    <title>Мой планировщик задач | PWA</title>
-  </head>
-  <body>
-    <div class="page">
-      <header class="site-header">
-        <section class="hero">
-          <div class="hero__image-wrapper">
-            <img class="hero__image" src="./assets/hero.png" alt="Мотивационная иллюстрация для TODO-приложения" />
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Мой планировщик" />
+  <!-- VAPID публичный ключ (сервер подставит автоматически) -->
+  <meta name="vapid-public-key" content="ВАШ_VAPID_PUBLIC_KEY" />
+  <link rel="icon" type="image/x-icon" href="/assets/icons/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/icons/favicon-16x16.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/favicon-32x32.png" />
+  <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>Мой планировщик задач | PWA</title>
+</head>
+<body>
+  <div class="page">
+    <header class="site-header">
+      <section class="hero">
+        <div class="hero__image-wrapper">
+          <img class="hero__image" src="/assets/hero.png" alt="Мотивационная иллюстрация для TODO-приложения" />
+        </div>
+        <div class="hero__content">
+          <p class="hero__eyebrow">ПРАКТИКИ 13–17</p>
+          <h1 class="hero__title">Мой планировщик задач</h1>
+          <p class="hero__text">
+            Полноценное PWA с офлайн-режимом, фильтрацией, редактированием,
+            WebSocket синхронизацией, Push уведомлениями и отложенными напоминаниями.
+          </p>
+          <div class="hero__controls">
+            <span class="badge">HTML</span>
+            <span class="badge">CSS</span>
+            <span class="badge">JavaScript</span>
+            <span id="networkStatus" class="badge badge--success">Онлайн</span>
+            <button id="installBtn" class="button button--primary button--small" type="button" hidden>📱 Установить PWA</button>
           </div>
-          <div class="hero__content">
-            <p class="hero__eyebrow">ПРАКТИКИ 13–16</p>
-            <h1 class="hero__title">Мой планировщик задач</h1>
-            <p class="hero__text">
-              Полноценное PWA с офлайн-режимом, фильтрацией, редактированием,
-              WebSocket синхронизацией и Push уведомлениями.
-            </p>
-            <div class="hero__controls">
-              <span class="badge">HTML</span>
-              <span class="badge">CSS</span>
-              <span class="badge">JavaScript</span>
-              <span id="networkStatus" class="badge badge--success">Онлайн</span>
-              <button id="installBtn" class="button button--primary button--small" type="button" hidden>
-                📱 Установить PWA
-              </button>
-            </div>
-            <p id="installHint" class="hero__hint">
-              Chrome / Edge: установка через кнопку в адресной строке (📱) или кнопку выше.
-              Safari: используйте Share → Add to Dock.
-            </p>
-          </div>
-        </section>
+          <p id="installHint" class="hero__hint">
+            Chrome / Edge: установка через кнопку в адресной строке (📱) или кнопку выше.
+            Safari: используйте Share → Add to Dock.
+          </p>
+        </div>
+      </section>
 
-        <!-- App Shell навигация (новая) -->
-        <nav class="nav" style="max-width: 980px; margin: 0 auto; padding: 0 16px 16px; display: flex; gap: 10px; flex-wrap: wrap;">
-          <button class="button button--ghost" data-page="home">🏠 Главная</button>
-          <button class="button button--ghost" data-page="theory">📖 Теория</button>
-          <button class="button button--ghost" data-page="push">🔔 WebSocket/Push</button>
-        </nav>
-        
-        <!-- Контейнер для динамического контента App Shell -->
-        <main id="contentView" style="max-width: 980px; margin: 0 auto; padding: 0 16px 16px;"></main>
-      </header>
+      <!-- App Shell навигация -->
+      <nav class="nav" style="max-width: 980px; margin: 10px auto; padding: 0 16px 16px; display: flex; gap: 10px; flex-wrap: wrap;">
+        <button class="button button--ghost" data-page="home">Главная</button>
+        <button class="button button--ghost" data-page="theory">Теория</button>
+        <button class="button button--ghost" data-page="push">WebSocket/Push</button>
+      </nav>
+      
+      <!-- Контейнер для динамического контента App Shell -->
+      <main id="contentView" style="max-width: 980px; margin: 0 auto; padding: 0 16px 16px;"></main>
+    </header>
 
-      <!-- ОСНОВНОЕ СОДЕРЖИМОЕ (TODO список - сохранён из вашей реализации) -->
-      <main class="container">
-        <section class="card">
-          <h2 class="card__title">📝 Добавить задачу</h2>
-          <form id="taskForm" class="task-form">
-            <label class="visually-hidden" for="taskInput">Текст задачи</label>
-            <input id="taskInput" class="input" name="task" type="text" maxlength="120" placeholder="Например: Просто сделай это!" autocomplete="off" required />
-            <button class="button button--primary" type="submit">➕ Добавить</button>
-          </form>
-          <p class="card__hint">Данные списка хранятся в <code>localStorage</code>, а статические ресурсы должны оставаться доступными и при отсутствии сети.</p>
-        </section>
+    <!-- ОСНОВНОЕ СОДЕРЖИМОЕ (TODO список) -->
+    <main class="container">
+      <section class="card">
+        <h2 class="card__title">Добавить задачу</h2>
+        <form id="taskForm" class="task-form">
+          <label class="visually-hidden" for="taskInput">Текст задачи</label>
+          <input id="taskInput" class="input" name="task" type="text" maxlength="120" placeholder="Например: Просто сделай это!" autocomplete="off" required />
+          <button class="button button--primary" type="submit">Добавить</button>
+        </form>
+        <p class="card__hint">Данные списка хранятся в <code>localStorage</code>, а статические ресурсы должны оставаться доступными и при отсутствии сети.</p>
+      </section>
 
-        <section class="card">
-          <div class="card__header">
-            <h2 class="card__title">📋 Список задач</h2>
-            <button id="clearCompletedBtn" class="button button--secondary" type="button">🧹 Удалить выполненные</button>
-          </div>
+      <section class="card">
+        <div class="card__header">
+          <h2 class="card__title">Список задач</h2>
+          <button id="clearCompletedBtn" class="button button--secondary" type="button">Удалить выполненные</button>
+        </div>
 
-          <!-- Блок фильтрации (сохранён из вашей реализации) -->
-          <div class="filter-container">
-            <span class="filter-label">Фильтр:</span>
-            <div class="filter-buttons">
-              <button id="filterAll" class="filter-btn active" data-filter="all">📋 Все</button>
-              <button id="filterActive" class="filter-btn" data-filter="active">⏳ Активные</button>
-              <button id="filterCompleted" class="filter-btn" data-filter="completed">✅ Выполненные</button>
-            </div>
-          </div>
-
-          <div id="taskStats" class="stats">Всего: 0 | Активных: 0 | Выполненных: 0</div>
-          <ul id="taskList" class="task-list"></ul>
-        </section>
-
-        <section class="card">
-          <h2 class="card__title">🎓 Что реализовано в проекте</h2>
-          <ol class="todo-points">
-            <li>✅ Редактирование существующей задачи</li>
-            <li>✅ Фильтрация: все / активные / выполненные</li>
-            <li>✅ Подтверждение удаления задач</li>
-            <li>✅ Улучшенная стратегия кэширования в <code>sw.js</code></li>
-            <li>✅ App Shell (контент подгружается динамически)</li>
-            <li>✅ WebSocket (Socket.IO) для синхронизации между вкладками</li>
-            <li>✅ Push уведомления (VAPID)</li>
-            <li>✅ Установка PWA в Chromium и Safari</li>
-          </ol>
-        </section>
-      </main>
-
-      <footer class="site-footer">
-        <div class="site-footer__content">
-          <div>
-            <p class="site-footer__title">📚 Учебный репозиторий</p>
-            <p class="site-footer__text">Практика по теме PWA: Service Worker, Web App Manifest, установка приложения, офлайн-режим, App Shell, WebSocket и Push уведомления.</p>
-          </div>
-          <div class="quote-box">
-            <p class="quote-box__label">💡 Случайная цитата о планировании</p>
-            <blockquote id="quoteText" class="quote-box__text">Хороший план сегодня лучше идеального плана завтра.</blockquote>
-            <button id="newQuoteBtn" class="button button--ghost button--small" type="button">🔄 Другую цитату</button>
+        <!-- Блок фильтрации -->
+        <div class="filter-container">
+          <span class="filter-label">Фильтр:</span>
+          <div class="filter-buttons">
+            <button id="filterAll" class="filter-btn active" data-filter="all">Все</button>
+            <button id="filterActive" class="filter-btn" data-filter="active">Активные</button>
+            <button id="filterCompleted" class="filter-btn" data-filter="completed">Выполненные</button>
           </div>
         </div>
-      </footer>
-    </div>
-    
-    <!-- Socket.IO клиент (для WebSocket) -->
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="./app.js"></script>
-  </body>
+
+        <div id="taskStats" class="stats">Всего: 0 | Активных: 0 | Выполненных: 0</div>
+        <ul id="taskList" class="task-list"></ul>
+      </section>
+
+      <!-- ПРАКТИКА 17: Отложенные Push-уведомления -->
+      <section class="card">
+        <h2 class="card__title">Практика 17 — Отложенные Push-уведомления</h2>
+        
+        <div style="margin-bottom: 20px;">
+          <h3 style="margin: 0 0 12px; font-size: 18px;">1. Подписка на уведомления</h3>
+          <button id="btn-subscribe" class="button button--primary" type="button">Разрешить и подписаться</button>
+          <button id="btn-push-test" class="button button--secondary" type="button" style="margin-left: 10px;">Тестовый Push</button>
+          <p class="card__hint" style="margin-top: 10px;">После подписки сервер сможет отправлять вам уведомления.</p>
+        </div>
+
+        <div style="margin-bottom: 20px;">
+          <h3 style="margin: 0 0 12px; font-size: 18px;">2. Запланировать напоминание</h3>
+          <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">
+            <div style="flex: 1; min-width: 200px;">
+              <label for="rem-title" style="display: block; margin-bottom: 6px; font-size: 14px; color: var(--text-soft);">Текст уведомления</label>
+              <input id="rem-title" class="input" type="text" placeholder="Например: Сдать практику" style="width: 100%;" />
+            </div>
+            <div style="width: 150px;">
+              <label for="rem-delay" style="display: block; margin-bottom: 6px; font-size: 14px; color: var(--text-soft);">Задержка (сек)</label>
+              <input id="rem-delay" class="input" type="number" value="30" min="1" style="width: 100%;" />
+            </div>
+            <button id="btn-schedule" class="button button--primary" type="button">Запланировать</button>
+          </div>
+          <p class="card__hint" style="margin-top: 10px;">Сервер отправит push-уведомление через указанное количество секунд.</p>
+        </div>
+      </section>
+
+      <!-- Блок лога -->
+      <section class="card">
+        <h2 class="card__title">Лог событий</h2>
+        <pre id="log" style="white-space: pre-wrap; margin:0; background: rgba(2, 6, 23, 0.8); color: #d7e2ff; padding: 12px; border-radius: 10px; min-height: 120px; font-family: monospace;"></pre>
+      </section>
+
+      <section class="card">
+        <h2 class="card__title">Что реализовано в проекте</h2>
+        <ol class="todo-points">
+          <li>Редактирование существующей задачи</li>
+          <li>Фильтрация: все / активные / выполненные</li>
+          <li>Подтверждение удаления задач</li>
+          <li>Улучшенная стратегия кэширования в <code>sw.js</code></li>
+          <li>App Shell (контент подгружается динамически)</li>
+          <li>WebSocket (Socket.IO) для синхронизации между вкладками</li>
+          <li>Push уведомления (VAPID)</li>
+          <li>Отложенные push-уведомления (Практика 17)</li>
+          <li>Кнопка «Отложить на 5 минут» в уведомлении</li>
+          <li>Установка PWA в Chromium и Safari</li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer__content">
+        <div>
+          <p class="site-footer__title">Учебный репозиторий</p>
+          <p class="site-footer__text">Практика по теме PWA: Service Worker, Web App Manifest, установка приложения, офлайн-режим, App Shell, WebSocket, Push уведомления и отложенные напоминания.</p>
+        </div>
+        <div class="quote-box">
+          <p class="quote-box__label">Случайная цитата о планировании</p>
+          <blockquote id="quoteText" class="quote-box__text">Хороший план сегодня лучше идеального плана завтра.</blockquote>
+          <button id="newQuoteBtn" class="button button--ghost button--small" type="button">Другую цитату</button>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="/app.js"></script>
+</body>
 </html>

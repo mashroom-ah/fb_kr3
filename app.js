@@ -1,7 +1,13 @@
 /**
- * Учебный TODO-менеджер для практик 13–16.
- * Объединённая версия: фильтрация, редактирование, подтверждение удаления,
- * App Shell, WebSocket синхронизация, Push уведомления.
+ * app.js (Практики 13-17)
+ * 
+ * Включает:
+ * - TODO-список (добавление, удаление, редактирование, фильтрация)
+ * - localStorage сохранение
+ * - PWA установка
+ * - WebSocket синхронизация
+ * - Push уведомления (подписка, тестовая отправка)
+ * - Отложенные напоминания (Практика 17)
  */
 
 // =========================================================
@@ -21,12 +27,13 @@ const newQuoteBtn = document.getElementById('newQuoteBtn');
 const filterAllBtn = document.getElementById('filterAll');
 const filterActiveBtn = document.getElementById('filterActive');
 const filterCompletedBtn = document.getElementById('filterCompleted');
+const logEl = document.getElementById('log');
 
 // =========================================================
 // Константы приложения
 // =========================================================
 
-const STORAGE_KEY = 'practice_13_14_todos_v2';
+const STORAGE_KEY = 'practice_13_17_todos_v2';
 const planningQuotes = [
   'Хороший план сегодня лучше идеального плана завтра.',
   'Планирование экономит время, которое иначе уходит на исправление хаоса.',
@@ -43,6 +50,17 @@ let hasShownInstallNotification = false;
 let currentFilter = 'all';
 let socket = null;
 let isWebSocketConnected = false;
+
+// =========================================================
+// Логирование
+// =========================================================
+
+function log(msg) {
+  if (logEl) {
+    logEl.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n${logEl.textContent}`;
+  }
+  console.log(msg);
+}
 
 // =========================================================
 // Работа с localStorage
@@ -84,14 +102,11 @@ function showRandomQuote() {
 }
 
 // =========================================================
-// Функции для WebSocket синхронизации (НОВОЕ)
+// WebSocket синхронизация
 // =========================================================
 
 function initWebSocket() {
-  if (socket && socket.connected) {
-    console.log('[WS] Already connected');
-    return;
-  }
+  if (socket && socket.connected) return;
 
   socket = io({
     transports: ['websocket', 'polling'],
@@ -101,144 +116,33 @@ function initWebSocket() {
   });
 
   socket.on('connect', () => {
-    console.log('[WS] Connected to server');
+    log('WebSocket подключён');
     isWebSocketConnected = true;
   });
 
   socket.on('disconnect', () => {
-    console.log('[WS] Disconnected from server');
+    log('WebSocket отключён');
     isWebSocketConnected = false;
   });
 
   socket.on('todo:event', (payload) => {
-    console.log('[WS] Received todo event:', payload);
-    if (payload && payload.type) {
-      switch (payload.type) {
-        case 'add':
-        case 'toggle':
-        case 'delete':
-        case 'edit':
-        case 'clear_completed':
-          renderTasks();
-          break;
-        default:
-          renderTasks();
-      }
-    } else {
-      renderTasks();
-    }
+    log(`Получено событие: ${payload?.type}`);
+    renderTasks();
   });
 
   socket.on('connect_error', (error) => {
-    console.error('[WS] Connection error:', error);
+    console.error('WebSocket error:', error);
     isWebSocketConnected = false;
   });
 }
 
 function emitTodoEvent(type, taskData = null) {
-  if (!isWebSocketConnected) {
-    console.log('[WS] Not connected, skipping emit');
-    return;
-  }
-  
-  const payload = {
-    type: type,
-    timestamp: Date.now(),
-    data: taskData
-  };
-  socket.emit('todo:event', payload);
-  console.log('[WS] Emitted todo event:', type);
+  if (!isWebSocketConnected) return;
+  socket.emit('todo:event', { type, timestamp: Date.now(), data: taskData });
 }
 
 // =========================================================
-// Функции для Push уведомлений (НОВОЕ)
-// =========================================================
-
-const VAPID_PUBLIC_KEY_META = document.querySelector('meta[name="vapid-public-key"]');
-const VAPID_PUBLIC_KEY = VAPID_PUBLIC_KEY_META ? VAPID_PUBLIC_KEY_META.getAttribute('content') : null;
-
-async function subscribeToPush() {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    console.warn('[PUSH] Push not supported');
-    return null;
-  }
-
-  let permission = Notification.permission;
-  if (permission === 'default') {
-    permission = await Notification.requestPermission();
-  }
-  
-  if (permission !== 'granted') {
-    console.warn('[PUSH] Notification permission denied');
-    return null;
-  }
-
-  if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'ВАШ_VAPID_PUBLIC_KEY') {
-    console.warn('[PUSH] VAPID public key not configured');
-    return null;
-  }
-
-  try {
-    const registration = await navigator.serviceWorker.ready;
-    let subscription = await registration.pushManager.getSubscription();
-    
-    if (!subscription) {
-      const applicationServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: applicationServerKey
-      });
-      console.log('[PUSH] New subscription created');
-    } else {
-      console.log('[PUSH] Existing subscription found');
-    }
-
-    const response = await fetch('/api/push/subscribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(subscription.toJSON())
-    });
-    
-    if (response.ok) {
-      console.log('[PUSH] Subscription saved on server');
-      return subscription;
-    }
-  } catch (error) {
-    console.error('[PUSH] Subscribe error:', error);
-  }
-  return null;
-}
-
-async function testPushNotification() {
-  try {
-    const response = await fetch('/api/push/test', { method: 'POST' });
-    const data = await response.json();
-    if (response.ok) {
-      console.log('[PUSH] Test push sent:', data);
-      alert(`Тестовое push-уведомление отправлено! (отправлено: ${data.sent} из ${data.total})`);
-    } else {
-      console.error('[PUSH] Test push failed:', data);
-      alert(`Ошибка отправки push: ${data.message || 'Неизвестная ошибка'}`);
-    }
-  } catch (error) {
-    console.error('[PUSH] Test push error:', error);
-    alert('Не удалось отправить тестовое push-уведомление');
-  }
-}
-
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
-
-// =========================================================
-// Редактирование задачи (из вашей реализации)
+// Редактирование задачи
 // =========================================================
 
 function editTask(taskId, newText) {
@@ -260,7 +164,7 @@ function editTask(taskId, newText) {
 }
 
 // =========================================================
-// Создание DOM-элемента задачи (с кнопкой редактирования)
+// Создание DOM-элемента задачи
 // =========================================================
 
 function createTaskElement(task) {
@@ -320,18 +224,14 @@ function updateStats(tasks) {
 }
 
 // =========================================================
-// Фильтрация (из вашей реализации)
+// Фильтрация
 // =========================================================
 
 function getFilteredTasks(tasks) {
   switch (currentFilter) {
-    case 'active':
-      return tasks.filter(task => !task.completed);
-    case 'completed':
-      return tasks.filter(task => task.completed);
-    case 'all':
-    default:
-      return tasks;
+    case 'active': return tasks.filter(task => !task.completed);
+    case 'completed': return tasks.filter(task => task.completed);
+    default: return tasks;
   }
 }
 
@@ -341,15 +241,9 @@ function updateFilterButtons() {
   if (filterCompletedBtn) filterCompletedBtn.classList.remove('active');
 
   switch (currentFilter) {
-    case 'all':
-      if (filterAllBtn) filterAllBtn.classList.add('active');
-      break;
-    case 'active':
-      if (filterActiveBtn) filterActiveBtn.classList.add('active');
-      break;
-    case 'completed':
-      if (filterCompletedBtn) filterCompletedBtn.classList.add('active');
-      break;
+    case 'all': if (filterAllBtn) filterAllBtn.classList.add('active'); break;
+    case 'active': if (filterActiveBtn) filterActiveBtn.classList.add('active'); break;
+    case 'completed': if (filterCompletedBtn) filterCompletedBtn.classList.add('active'); break;
   }
 }
 
@@ -407,9 +301,7 @@ function toggleTask(taskId) {
   const tasks = loadTasks();
   const task = tasks.find(t => t.id === taskId);
   const updated = tasks.map((task) => {
-    if (task.id === taskId) {
-      return { ...task, completed: !task.completed };
-    }
+    if (task.id === taskId) return { ...task, completed: !task.completed };
     return task;
   });
   saveTasks(updated);
@@ -453,7 +345,7 @@ function clearCompletedTasks() {
 }
 
 // =========================================================
-// Установка PWA (из вашей реализации с улучшениями)
+// Установка PWA
 // =========================================================
 
 function isStandaloneMode() {
@@ -540,27 +432,25 @@ window.addEventListener('appinstalled', () => {
 });
 
 // =========================================================
-// Регистрация Service Worker (с уведомлением об обновлении)
+// Service Worker регистрация
 // =========================================================
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) {
-    console.warn('Service Worker не поддерживается в данном браузере.');
+    console.warn('Service Worker не поддерживается');
     return;
   }
 
   window.addEventListener('load', async () => {
     try {
-      const registration = await navigator.serviceWorker.register('./sw.js');
-      console.log('Service Worker зарегистрирован:', registration.scope);
+      const registration = await navigator.serviceWorker.register('/sw.js');
+      log('Service Worker зарегистрирован');
 
       registration.addEventListener('updatefound', () => {
         const newWorker = registration.installing;
-        console.log('Найдена новая версия Service Worker');
-        
         newWorker.addEventListener('statechange', () => {
           if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            console.log('Доступно обновление приложения!');
+            log('Доступна новая версия приложения!');
             const updateNotification = document.createElement('div');
             updateNotification.className = 'update-notification';
             updateNotification.innerHTML = `
@@ -568,7 +458,6 @@ function registerServiceWorker() {
               <button id="refreshAppBtn" class="button button--small button--primary">Обновить</button>
             `;
             document.body.appendChild(updateNotification);
-            
             document.getElementById('refreshAppBtn')?.addEventListener('click', () => {
               newWorker.postMessage({ action: 'skipWaiting' });
               window.location.reload();
@@ -584,7 +473,115 @@ function registerServiceWorker() {
 }
 
 // =========================================================
-// App Shell загрузка контента (НОВОЕ)
+// PUSH УВЕДОМЛЕНИЯ (Практика 16-17)
+// =========================================================
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+async function subscribeToPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    log('Push не поддерживается в этом браузере');
+    return null;
+  }
+
+  let permission = Notification.permission;
+  if (permission === 'default') {
+    permission = await Notification.requestPermission();
+  }
+  
+  if (permission !== 'granted') {
+    log('Разрешение на уведомления не получено');
+    return null;
+  }
+
+  try {
+    const response = await fetch('/api/push/vapid-public-key');
+    const { publicKey } = await response.json();
+    if (!publicKey) throw new Error('VAPID public key not configured');
+
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    
+    if (!subscription) {
+      const applicationServerKey = urlBase64ToUint8Array(publicKey);
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey
+      });
+      log('Новая push-подписка создана');
+    } else {
+      log('Используем существующую push-подписку');
+    }
+
+    const subscribeRes = await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(subscription.toJSON())
+    });
+    const result = await subscribeRes.json();
+    log(`Подписка сохранена на сервере. Всего подписок: ${result.count}`);
+    return subscription;
+  } catch (error) {
+    log(`Ошибка подписки: ${error.message}`);
+    return null;
+  }
+}
+
+async function testPush() {
+  try {
+    const response = await fetch('/api/push/test', { method: 'POST' });
+    const result = await response.json();
+    if (result.error) {
+      log(`Ошибка: ${result.message}`);
+    } else {
+      log(`Тестовый push отправлен: ${result.sent} из ${result.total}`);
+    }
+  } catch (error) {
+    log(`Ошибка отправки: ${error.message}`);
+  }
+}
+
+async function scheduleReminder() {
+  const title = document.getElementById('rem-title')?.value.trim() || 'Напоминание';
+  const delaySeconds = Number(document.getElementById('rem-delay')?.value || 30);
+
+  if (delaySeconds < 1) {
+    alert('Задержка должна быть больше 0 секунд');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/reminders/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body: 'Отложенное уведомление (ПР17)', delaySeconds })
+    });
+    const result = await response.json();
+    
+    if (result.error) {
+      log(`Ошибка планирования: ${result.message}`);
+      alert(`Ошибка: ${result.message}`);
+    } else {
+      log(`Напоминание запланировано: id=${result.reminder.id}, через ${delaySeconds} сек`);
+      alert(`✅ Напоминание запланировано!\nОтправится через ${delaySeconds} сек.`);
+    }
+  } catch (error) {
+    log(`Ошибка: ${error.message}`);
+    alert('Ошибка при планировании напоминания');
+  }
+}
+
+// =========================================================
+// App Shell загрузка контента
 // =========================================================
 
 const contentViewEl = document.getElementById('contentView');
@@ -596,24 +593,9 @@ async function loadPage(page) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
     if (contentViewEl) contentViewEl.innerHTML = html;
-    
-    // Если загружена страница с push, добавляем обработчики
-    if (page === 'push') {
-      setTimeout(() => {
-        const subscribeBtn = document.getElementById('subscribePushBtn');
-        const testPushBtn = document.getElementById('testPushBtn');
-        if (subscribeBtn) subscribeBtn.addEventListener('click', subscribeToPush);
-        if (testPushBtn) testPushBtn.addEventListener('click', testPushNotification);
-      }, 100);
-    }
   } catch (e) {
     if (contentViewEl) {
-      contentViewEl.innerHTML = `
-        <section class="card" style="padding:16px; border:1px solid #e5e7eb; border-radius:14px; background:#fff;">
-          <h2 style="margin:0 0 8px;">Нет доступа к контенту</h2>
-          <p style="margin:0; color:#374151;">Не удалось загрузить <code>${url}</code>. Проверьте сеть/HTTPS и кеширование в Service Worker.</p>
-        </section>
-      `;
+      contentViewEl.innerHTML = `<section class="card"><p>Не удалось загрузить ${url}</p></section>`;
     }
   }
 }
@@ -637,9 +619,7 @@ taskList.addEventListener('click', (event) => {
   const taskId = taskItem.dataset.id;
   const action = target.dataset.action;
 
-  if (action === 'delete') {
-    deleteTask(taskId);
-  }
+  if (action === 'delete') deleteTask(taskId);
   if (action === 'edit') {
     const tasks = loadTasks();
     const task = tasks.find(t => t.id === taskId);
@@ -691,10 +671,18 @@ if (filterCompletedBtn) {
 
 document.querySelectorAll('button[data-page]').forEach((btn) => {
   btn.addEventListener('click', () => {
-    const page = btn.getAttribute('data-page');
-    loadPage(page);
+    loadPage(btn.getAttribute('data-page'));
   });
 });
+
+// Кнопки Push
+const subscribeBtn = document.getElementById('btn-subscribe');
+const testPushBtn = document.getElementById('btn-push-test');
+const scheduleBtn = document.getElementById('btn-schedule');
+
+if (subscribeBtn) subscribeBtn.addEventListener('click', subscribeToPush);
+if (testPushBtn) testPushBtn.addEventListener('click', testPush);
+if (scheduleBtn) scheduleBtn.addEventListener('click', scheduleReminder);
 
 // =========================================================
 // Инициализация
@@ -709,6 +697,7 @@ function init() {
   updateFilterButtons();
   initWebSocket();
   loadPage('home');
+  log('Приложение инициализировано');
 }
 
 init();
