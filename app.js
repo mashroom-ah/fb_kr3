@@ -1,23 +1,12 @@
 /**
- * Учебный TODO-менеджер для практик 13–14.
- *
- * Что уже реализовано в шаблоне:
- * 1. Добавление, удаление и переключение статуса задач.
- * 2. Хранение задач в localStorage.
- * 3. Вывод статистики по задачам.
- * 4. Регистрация Service Worker.
- * 5. Поддержка установки PWA в Chromium-браузерах.
- * 6. Отдельная подсказка по установке в Safari.
- * 7. Случайные мотивационные цитаты в футере.
- *
- * Что оставлено студентам:
- * - редактирование задачи;
- * - фильтрация списка;
- * - подтверждение удаления;
- * - улучшение кэширования в Service Worker;
- * - более продуманная обработка обновлений PWA.
+ * Учебный TODO-менеджер для практик 13–16.
+ * Объединённая версия: фильтрация, редактирование, подтверждение удаления,
+ * App Shell, WebSocket синхронизация, Push уведомления.
  */
 
+// =========================================================
+// DOM-элементы интерфейса
+// =========================================================
 
 const taskForm = document.getElementById('taskForm');
 const taskInput = document.getElementById('taskInput');
@@ -37,17 +26,7 @@ const filterCompletedBtn = document.getElementById('filterCompleted');
 // Константы приложения
 // =========================================================
 
-/**
- * Ключ, под которым массив задач лежит в localStorage.
- * Если поменять ключ, приложение начнёт читать и сохранять данные
- * уже в другую запись хранилища.
- */
 const STORAGE_KEY = 'practice_13_14_todos_v2';
-
-/**
- * Массив цитат для нижнего блока.
- * Это небольшой пример клиентской динамики без обращения к серверу.
- */
 const planningQuotes = [
   'Хороший план сегодня лучше идеального плана завтра.',
   'Планирование экономит время, которое иначе уходит на исправление хаоса.',
@@ -61,7 +40,9 @@ const planningQuotes = [
 
 let deferredInstallPrompt = null;
 let hasShownInstallNotification = false;
-let currentFilter = 'all'; // Возможные значения: 'all', 'active', 'completed'
+let currentFilter = 'all';
+let socket = null;
+let isWebSocketConnected = false;
 
 // =========================================================
 // Работа с localStorage
@@ -78,11 +59,6 @@ function loadTasks() {
   }
 }
 
-/**
- * Сохраняет массив задач в localStorage.
- *
- * @param {Array} tasks - массив объектов задач.
- */
 function saveTasks(tasks) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
 }
@@ -91,49 +67,202 @@ function saveTasks(tasks) {
 // Вспомогательные функции
 // =========================================================
 
-
 function generateId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-
 function updateNetworkStatus() {
   const isOnline = navigator.onLine;
-
   networkStatus.textContent = isOnline ? 'Онлайн' : 'Офлайн';
   networkStatus.classList.toggle('badge--success', isOnline);
   networkStatus.classList.toggle('badge--offline', !isOnline);
 }
-
 
 function showRandomQuote() {
   const randomIndex = Math.floor(Math.random() * planningQuotes.length);
   quoteText.textContent = planningQuotes[randomIndex];
 }
 
-// Функция редактирования задачи
+// =========================================================
+// Функции для WebSocket синхронизации (НОВОЕ)
+// =========================================================
+
+function initWebSocket() {
+  if (socket && socket.connected) {
+    console.log('[WS] Already connected');
+    return;
+  }
+
+  socket = io({
+    transports: ['websocket', 'polling'],
+    reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 1000
+  });
+
+  socket.on('connect', () => {
+    console.log('[WS] Connected to server');
+    isWebSocketConnected = true;
+  });
+
+  socket.on('disconnect', () => {
+    console.log('[WS] Disconnected from server');
+    isWebSocketConnected = false;
+  });
+
+  socket.on('todo:event', (payload) => {
+    console.log('[WS] Received todo event:', payload);
+    if (payload && payload.type) {
+      switch (payload.type) {
+        case 'add':
+        case 'toggle':
+        case 'delete':
+        case 'edit':
+        case 'clear_completed':
+          renderTasks();
+          break;
+        default:
+          renderTasks();
+      }
+    } else {
+      renderTasks();
+    }
+  });
+
+  socket.on('connect_error', (error) => {
+    console.error('[WS] Connection error:', error);
+    isWebSocketConnected = false;
+  });
+}
+
+function emitTodoEvent(type, taskData = null) {
+  if (!isWebSocketConnected) {
+    console.log('[WS] Not connected, skipping emit');
+    return;
+  }
+  
+  const payload = {
+    type: type,
+    timestamp: Date.now(),
+    data: taskData
+  };
+  socket.emit('todo:event', payload);
+  console.log('[WS] Emitted todo event:', type);
+}
+
+// =========================================================
+// Функции для Push уведомлений (НОВОЕ)
+// =========================================================
+
+const VAPID_PUBLIC_KEY_META = document.querySelector('meta[name="vapid-public-key"]');
+const VAPID_PUBLIC_KEY = VAPID_PUBLIC_KEY_META ? VAPID_PUBLIC_KEY_META.getAttribute('content') : null;
+
+async function subscribeToPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    console.warn('[PUSH] Push not supported');
+    return null;
+  }
+
+  let permission = Notification.permission;
+  if (permission === 'default') {
+    permission = await Notification.requestPermission();
+  }
+  
+  if (permission !== 'granted') {
+    console.warn('[PUSH] Notification permission denied');
+    return null;
+  }
+
+  if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY === 'ВАШ_VAPID_PUBLIC_KEY') {
+    console.warn('[PUSH] VAPID public key not configured');
+    return null;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    
+    if (!subscription) {
+      const applicationServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: applicationServerKey
+      });
+      console.log('[PUSH] New subscription created');
+    } else {
+      console.log('[PUSH] Existing subscription found');
+    }
+
+    const response = await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(subscription.toJSON())
+    });
+    
+    if (response.ok) {
+      console.log('[PUSH] Subscription saved on server');
+      return subscription;
+    }
+  } catch (error) {
+    console.error('[PUSH] Subscribe error:', error);
+  }
+  return null;
+}
+
+async function testPushNotification() {
+  try {
+    const response = await fetch('/api/push/test', { method: 'POST' });
+    const data = await response.json();
+    if (response.ok) {
+      console.log('[PUSH] Test push sent:', data);
+      alert(`Тестовое push-уведомление отправлено! (отправлено: ${data.sent} из ${data.total})`);
+    } else {
+      console.error('[PUSH] Test push failed:', data);
+      alert(`Ошибка отправки push: ${data.message || 'Неизвестная ошибка'}`);
+    }
+  } catch (error) {
+    console.error('[PUSH] Test push error:', error);
+    alert('Не удалось отправить тестовое push-уведомление');
+  }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+// =========================================================
+// Редактирование задачи (из вашей реализации)
+// =========================================================
+
 function editTask(taskId, newText) {
   const trimmedText = newText.trim();
-
   if (!trimmedText) {
     alert('Текст задачи не может быть пустым');
     return false;
   }
 
   const tasks = loadTasks();
+  const oldTask = tasks.find(t => t.id === taskId);
   const updated = tasks.map(task => 
     task.id === taskId ? { ...task, text: trimmedText } : task
   );
   saveTasks(updated);
   renderTasks();
+  emitTodoEvent('edit', { id: taskId, oldText: oldTask?.text, newText: trimmedText });
   return true;
 }
 
-/**
- * Формирует DOM-элемент для одной задачи.
- * Здесь выбран вариант именно с созданием DOM-узлов,
- * чтобы код был нагляднее и безопаснее для разбора.
- */
+// =========================================================
+// Создание DOM-элемента задачи (с кнопкой редактирования)
+// =========================================================
+
 function createTaskElement(task) {
   const li = document.createElement('li');
   li.className = 'task-item';
@@ -167,7 +296,6 @@ function createTaskElement(task) {
   editBtn.className = 'button button--secondary button--small';
   editBtn.textContent = 'Редактировать';
   editBtn.dataset.action = 'edit';
-  editBtn.setAttribute('aria-label', 'Редактировать задачу');
 
   const deleteBtn = document.createElement('button');
   deleteBtn.type = 'button';
@@ -184,38 +312,34 @@ function createTaskElement(task) {
   return li;
 }
 
-/**
- * Перерисовывает блок статистики.
- */
 function updateStats(tasks) {
   const total = tasks.length;
   const completed = tasks.filter((task) => task.completed).length;
   const active = total - completed;
-
   taskStats.textContent = `Всего: ${total} | Активных: ${active} | Выполненных: ${completed}`;
 }
 
-// Функция фильтра
+// =========================================================
+// Фильтрация (из вашей реализации)
+// =========================================================
+
 function getFilteredTasks(tasks) {
   switch (currentFilter) {
     case 'active':
       return tasks.filter(task => !task.completed);
-    case 'completed' :
+    case 'completed':
       return tasks.filter(task => task.completed);
-    case 'all' :
+    case 'all':
     default:
       return tasks;
   }
 }
 
-// Обновление активного класса кнопок фильтра
 function updateFilterButtons() {
-  // Убираем active класс у всех кнопок
   if (filterAllBtn) filterAllBtn.classList.remove('active');
   if (filterActiveBtn) filterActiveBtn.classList.remove('active');
   if (filterCompletedBtn) filterCompletedBtn.classList.remove('active');
 
-   // Добавляем active класс текущей кнопке
   switch (currentFilter) {
     case 'all':
       if (filterAllBtn) filterAllBtn.classList.add('active');
@@ -229,18 +353,14 @@ function updateFilterButtons() {
   }
 }
 
-
 function renderTasks() {
   const allTasks = loadTasks();
-  // Применяем фильтр
   const tasks = getFilteredTasks(allTasks);
   
   taskList.innerHTML = '';
 
   if (tasks.length === 0) {
     let emptyMessage = 'Пока задач нет. Добавьте первую запись.';
-    
-    // Разные сообщения для разных фильтров
     if (currentFilter === 'active' && allTasks.length > 0) {
       emptyMessage = 'Нет активных задач. Отличная работа!';
     } else if (currentFilter === 'completed' && allTasks.length > 0) {
@@ -258,7 +378,6 @@ function renderTasks() {
   tasks.forEach((task) => {
     taskList.appendChild(createTaskElement(task));
   });
-
   updateStats(allTasks);
 }
 
@@ -266,20 +385,11 @@ function renderTasks() {
 // Бизнес-логика TODO-списка
 // =========================================================
 
-/**
- * Добавляет новую задачу.
- *
- * @param {string} text - текст задачи.
- */
 function addTask(text) {
   const normalizedText = text.trim();
-
-  if (!normalizedText) {
-    return;
-  }
+  if (!normalizedText) return;
 
   const tasks = loadTasks();
-
   const newTask = {
     id: generateId(),
     text: normalizedText,
@@ -290,34 +400,25 @@ function addTask(text) {
   tasks.unshift(newTask);
   saveTasks(tasks);
   renderTasks();
+  emitTodoEvent('add', newTask);
 }
 
-/**
- * Переключает статус задачи по id.
- */
 function toggleTask(taskId) {
-  const updated = loadTasks().map((task) => {
+  const tasks = loadTasks();
+  const task = tasks.find(t => t.id === taskId);
+  const updated = tasks.map((task) => {
     if (task.id === taskId) {
-      return {
-        ...task,
-        completed: !task.completed
-      };
+      return { ...task, completed: !task.completed };
     }
-
     return task;
   });
-
   saveTasks(updated);
   renderTasks();
+  emitTodoEvent('toggle', { id: taskId, completed: !task?.completed });
 }
 
-/**
- * Удаляет задачу по id.
- * Добавлено подтверждение
- */
 function deleteTask(taskId) {
   const task = loadTasks().find(t => t.id === taskId);
-
   if (!task) return;
 
   const confirmMessage = `Удалить задачу "${task.text.slice(0, 50)}${task.text.length > 50 ? '...' : ''}"?`;
@@ -325,12 +426,10 @@ function deleteTask(taskId) {
     const updated = loadTasks().filter((task) => task.id !== taskId);
     saveTasks(updated);
     renderTasks();
+    emitTodoEvent('delete', { id: taskId });
   }
 }
 
-/**
- * Удаляет все выполненные задачи. Добавлено подтверждение
- */
 function clearCompletedTasks() {
   const tasks = loadTasks();
   const completedTasks = tasks.filter((task) => task.completed);
@@ -349,59 +448,38 @@ function clearCompletedTasks() {
     const updated = tasks.filter((task) => !task.completed);
     saveTasks(updated);
     renderTasks();
+    emitTodoEvent('clear_completed', { count: completedCount });
   }
 }
 
 // =========================================================
-// Установка PWA
+// Установка PWA (из вашей реализации с улучшениями)
 // =========================================================
 
-/**
- * Определяет, запущено ли приложение уже в standalone-режиме.
- * Это полезно, чтобы не показывать кнопку установки там,
- * где приложение уже установлено и открыто как отдельное окно.
- */
 function isStandaloneMode() {
   return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 }
 
-/**
- * Обновляет текст подсказки по установке.
- * В Chromium мы можем показать собственную кнопку установки,
- * а в Safari остаётся сценарий через меню браузера.
- */
 function updateInstallHint() {
   if (isStandaloneMode()) {
     installHint.textContent = 'Приложение уже запущено в standalone-режиме.';
-    if (installBtn) {
-      installBtn.hidden = true;
-    }
+    if (installBtn) installBtn.hidden = true;
     return;
   }
-
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-
   if (isSafari) {
     installHint.textContent = 'Safari: для установки используйте File → Add to Dock.';
   } else {
-    installHint.textContent = 'Chrome / Edge: установите приложение через кнопку браузера или кнопку «Установить PWA». ';
+    installHint.textContent = 'Chrome / Edge: установите приложение через кнопку браузера или кнопку «Установить PWA».';
   }
 }
 
 function showInstallNotification() {
-  // Не показываем, если уже standalone или уже показывали
-  if (isStandaloneMode() || hasShownInstallNotification) {
-    return;
-  }
-  
-  // Не показываем в Safari (там нет программной установки)
+  if (isStandaloneMode() || hasShownInstallNotification) return;
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  if (isSafari) {
-    return;
-  }
+  if (isSafari) return;
   
   hasShownInstallNotification = true;
-  
   const notification = document.createElement('div');
   notification.className = 'install-notification';
   notification.innerHTML = `
@@ -416,27 +494,18 @@ function showInstallNotification() {
     </div>
   `;
   document.body.appendChild(notification);
-  
-  // Анимация появления
   setTimeout(() => notification.classList.add('visible'), 10);
   
-  // Кнопка установки
   document.getElementById('installNotifyBtn')?.addEventListener('click', () => {
     if (deferredInstallPrompt) {
       deferredInstallPrompt.prompt();
-      deferredInstallPrompt.userChoice.then(() => {
-        notification.remove();
-      });
+      deferredInstallPrompt.userChoice.then(() => notification.remove());
     }
   });
-  
-  // Кнопка закрытия
   document.getElementById('closeNotifyBtn')?.addEventListener('click', () => {
     notification.classList.remove('visible');
     setTimeout(() => notification.remove(), 300);
   });
-  
-  // Автоматическое скрытие через 15 секунд
   setTimeout(() => {
     if (notification.parentNode) {
       notification.classList.remove('visible');
@@ -445,61 +514,35 @@ function showInstallNotification() {
   }, 15000);
 }
 
-
-/**
- * Событие beforeinstallprompt поддерживается в Chromium.
- * Здесь мы перехватываем стандартный prompt, сохраняем событие
- * и показываем свою кнопку установки в интерфейсе.
- */
 window.addEventListener('beforeinstallprompt', (event) => {
   event.preventDefault();
   deferredInstallPrompt = event;
-
-  if (installBtn && !isStandaloneMode()) {
-    installBtn.hidden = false;
-  }
+  if (installBtn && !isStandaloneMode()) installBtn.hidden = false;
   showInstallNotification();
 });
 
-/**
- * Нажатие на кнопку установки.
- */
 if (installBtn) {
   installBtn.addEventListener('click', async () => {
-    if (!deferredInstallPrompt) {
-      return;
-    }
-
+    if (!deferredInstallPrompt) return;
     deferredInstallPrompt.prompt();
     const choiceResult = await deferredInstallPrompt.userChoice;
     console.log('Результат установки PWA:', choiceResult.outcome);
-
     deferredInstallPrompt = null;
     installBtn.hidden = true;
   });
 }
 
-/**
- * Если приложение установлено, скрываем кнопку.
- */
 window.addEventListener('appinstalled', () => {
   console.log('PWA успешно установлено.');
   deferredInstallPrompt = null;
-
-  if (installBtn) {
-    installBtn.hidden = true;
-  }
-
+  if (installBtn) installBtn.hidden = true;
   updateInstallHint();
 });
 
 // =========================================================
-// Регистрация Service Worker
+// Регистрация Service Worker (с уведомлением об обновлении)
 // =========================================================
 
-/**
- * Регистрируем Service Worker только там, где технология поддерживается.
- */
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) {
     console.warn('Service Worker не поддерживается в данном браузере.');
@@ -511,14 +554,6 @@ function registerServiceWorker() {
       const registration = await navigator.serviceWorker.register('./sw.js');
       console.log('Service Worker зарегистрирован:', registration.scope);
 
-      /**
-       * TODO для студентов:
-       * 1. Добавить интерфейсное уведомление о том, что офлайн-режим готов.
-       * 2. Обработать сценарий появления новой версии Service Worker.
-       * 3. Показать пользователю кнопку "Обновить приложение".
-       */
-
-      console.log('Офлайн-режим готов к работе!');
       registration.addEventListener('updatefound', () => {
         const newWorker = registration.installing;
         console.log('Найдена новая версия Service Worker');
@@ -538,7 +573,6 @@ function registerServiceWorker() {
               newWorker.postMessage({ action: 'skipWaiting' });
               window.location.reload();
             });
-            
             setTimeout(() => updateNotification.remove(), 10000);
           }
         });
@@ -550,12 +584,44 @@ function registerServiceWorker() {
 }
 
 // =========================================================
+// App Shell загрузка контента (НОВОЕ)
+// =========================================================
+
+const contentViewEl = document.getElementById('contentView');
+
+async function loadPage(page) {
+  const url = `/content/${page}.html`;
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    if (contentViewEl) contentViewEl.innerHTML = html;
+    
+    // Если загружена страница с push, добавляем обработчики
+    if (page === 'push') {
+      setTimeout(() => {
+        const subscribeBtn = document.getElementById('subscribePushBtn');
+        const testPushBtn = document.getElementById('testPushBtn');
+        if (subscribeBtn) subscribeBtn.addEventListener('click', subscribeToPush);
+        if (testPushBtn) testPushBtn.addEventListener('click', testPushNotification);
+      }, 100);
+    }
+  } catch (e) {
+    if (contentViewEl) {
+      contentViewEl.innerHTML = `
+        <section class="card" style="padding:16px; border:1px solid #e5e7eb; border-radius:14px; background:#fff;">
+          <h2 style="margin:0 0 8px;">Нет доступа к контенту</h2>
+          <p style="margin:0; color:#374151;">Не удалось загрузить <code>${url}</code>. Проверьте сеть/HTTPS и кеширование в Service Worker.</p>
+        </section>
+      `;
+    }
+  }
+}
+
+// =========================================================
 // Обработчики событий
 // =========================================================
 
-/**
- * Отправка формы добавления задачи.
- */
 taskForm.addEventListener('submit', (event) => {
   event.preventDefault();
   addTask(taskInput.value);
@@ -563,14 +629,10 @@ taskForm.addEventListener('submit', (event) => {
   taskInput.focus();
 });
 
-// Делегирование кликов по списку задач с поддержкой редактирования
 taskList.addEventListener('click', (event) => {
   const target = event.target;
   const taskItem = target.closest('.task-item');
-
-  if (!taskItem) {
-    return;
-  }
+  if (!taskItem) return;
 
   const taskId = taskItem.dataset.id;
   const action = target.dataset.action;
@@ -578,11 +640,9 @@ taskList.addEventListener('click', (event) => {
   if (action === 'delete') {
     deleteTask(taskId);
   }
-
   if (action === 'edit') {
     const tasks = loadTasks();
     const task = tasks.find(t => t.id === taskId);
-    
     if (task) {
       const newText = prompt('Редактирование задачи:', task.text);
       if (newText !== null && newText.trim() !== '') {
@@ -594,21 +654,11 @@ taskList.addEventListener('click', (event) => {
   }
 });
 
-/**
- * Отдельно обрабатываем изменение чекбокса.
- */
 taskList.addEventListener('change', (event) => {
   const target = event.target;
-
-  if (target.dataset.action !== 'toggle') {
-    return;
-  }
-
+  if (target.dataset.action !== 'toggle') return;
   const taskItem = target.closest('.task-item');
-  if (!taskItem) {
-    return;
-  }
-
+  if (!taskItem) return;
   toggleTask(taskItem.dataset.id);
 });
 
@@ -624,7 +674,6 @@ if (filterAllBtn) {
     renderTasks();
   });
 }
-
 if (filterActiveBtn) {
   filterActiveBtn.addEventListener('click', () => {
     currentFilter = 'active';
@@ -632,7 +681,6 @@ if (filterActiveBtn) {
     renderTasks();
   });
 }
-
 if (filterCompletedBtn) {
   filterCompletedBtn.addEventListener('click', () => {
     currentFilter = 'completed';
@@ -640,6 +688,13 @@ if (filterCompletedBtn) {
     renderTasks();
   });
 }
+
+document.querySelectorAll('button[data-page]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const page = btn.getAttribute('data-page');
+    loadPage(page);
+  });
+});
 
 // =========================================================
 // Инициализация
@@ -652,6 +707,8 @@ function init() {
   renderTasks();
   registerServiceWorker();
   updateFilterButtons();
+  initWebSocket();
+  loadPage('home');
 }
 
 init();

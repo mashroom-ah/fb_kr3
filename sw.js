@@ -1,147 +1,193 @@
 /**
- * УЛУЧШЕНИЯ (согласно TODO из комментариев):
- * - Добавлен runtime-cache для GET-ресурсов
- * - Реализована стратегия Network First для HTML
- * - Реализована стратегия Stale While Revalidate для CSS/JS
- * - Улучшен fallback для офлайн-режима
+ * Service Worker (Практики 13–16)
+ * Объединённая версия с улучшенным кэшированием и поддержкой Push
  */
 
-const CACHE_NAME = 'practice-13-14-cache-v4';
+const CACHE_NAME = 'pwa-combined-v2';
+const SHELL_CACHE = 'pwa-shell-v1';
+const RUNTIME_CACHE = 'pwa-runtime-v1';
 
-const ASSETS_TO_CACHE = [
-  './',
-  './index.html',
-  './styles.css',
-  './app.js',
-  './manifest.json',
-  './assets/hero.png',
-  './assets/icons/favicon.ico',
-  './assets/icons/favicon-16x16.png',
-  './assets/icons/favicon-32x32.png',
-  './assets/icons/favicon-48x48.png',
-  './assets/icons/favicon-64x64.png',
-  './assets/icons/favicon-128x128.png',
-  './assets/icons/favicon-256x256.png',
-  './assets/icons/favicon-512x512.png',
-  './assets/icons/apple-touch-icon-57x57.png',
-  './assets/icons/apple-touch-icon-114x114.png',
-  './assets/icons/apple-touch-icon-120x120.png',
-  './assets/icons/apple-touch-icon.png'
+// Основные ресурсы для предварительного кэширования
+const SHELL_ASSETS = [
+  '/',
+  '/index.html',
+  '/styles.css',
+  '/app.js',
+  '/manifest.json',
+  '/assets/hero.png',
+  '/assets/icons/favicon.ico',
+  '/assets/icons/favicon-16x16.png',
+  '/assets/icons/favicon-32x32.png',
+  '/assets/icons/favicon-48x48.png',
+  '/assets/icons/favicon-64x64.png',
+  '/assets/icons/favicon-128x128.png',
+  '/assets/icons/favicon-256x256.png',
+  '/assets/icons/favicon-512x512.png',
+  '/assets/icons/apple-touch-icon.png'
+];
+
+// Контентные страницы для App Shell
+const CONTENT_PAGES = [
+  '/content/home.html',
+  '/content/theory.html',
+  '/content/push.html'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS_TO_CACHE))
+    (async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      await cache.addAll(SHELL_ASSETS);
+      await cache.addAll(CONTENT_PAGES);
+    })()
   );
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheKeys) => {
-      return Promise.all(
-        cacheKeys
-          .filter((key) => key !== CACHE_NAME)
-          .map((oldKey) => caches.delete(oldKey))
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((k) => ![SHELL_CACHE, RUNTIME_CACHE].includes(k))
+          .map((k) => caches.delete(k))
       );
-    })
+      self.clients.claim();
+    })()
   );
-  self.clients.claim();
 });
 
+// =========================================================
+// Стратегии кэширования
+// =========================================================
+
+async function networkFirst(request) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  try {
+    const response = await fetch(request);
+    if (response && response.status === 200) {
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch (error) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    const shellCached = await caches.match(request);
+    if (shellCached) return shellCached;
+    return new Response('Офлайн: ресурс недоступен', {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+    });
+  }
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(RUNTIME_CACHE);
+  const cachedResponse = await cache.match(request);
+  
+  const fetchPromise = fetch(request).then(async (response) => {
+    if (response && response.status === 200) {
+      cache.put(request, response.clone());
+    }
+    return response;
+  }).catch(() => {});
+  
+  return cachedResponse || fetchPromise;
+}
+
+async function cacheFirst(request) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+  
+  try {
+    const response = await fetch(request);
+    if (response && response.status === 200) {
+      const cache = await caches.open(RUNTIME_CACHE);
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch (error) {
+    return new Response('Офлайн: ресурс недоступен', {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+    });
+  }
+}
+
+// =========================================================
+// Fetch handler
+// =========================================================
+
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') {
-    return;
-  }
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
 
-  // =========================================================
-  // 1. ДЛЯ HTML-СТРАНИЦ: стратегия Network First
-  // =========================================================
+  // HTML страницы (навигация): Network First
   if (event.request.mode === 'navigate') {
-    event.respondWith(
-      fetch(event.request)
-        .then((networkResponse) => {
-          return caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, networkResponse.clone());
-            return networkResponse;
-          });
-        })
-        .catch(async () => {
-          const cachedResponse = await caches.match(event.request);
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          return new Response(
-            '<html><body style="font-family: sans-serif; text-align: center; padding: 50px;"><h1>Офлайн-режим</h1><p>Вы не подключены к интернету.</p><button onclick="location.reload()">Попробовать снова</button></body></html>',
-            {
-              status: 200,
-              headers: { 'Content-Type': 'text/html; charset=utf-8' }
-            }
-          );
-        })
-    );
+    event.respondWith(networkFirst(event.request));
     return;
   }
 
-  // =========================================================
-  // 2. ДЛЯ CSS И JS: стратегия Stale While Revalidate
-  // =========================================================
+  // Контентные страницы App Shell: Network First
+  if (url.pathname.startsWith('/content/')) {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
+
+  // CSS и JS: Stale While Revalidate
   if (event.request.destination === 'style' || event.request.destination === 'script') {
-    event.respondWith(
-      (async () => {
-        const cachedResponse = await caches.match(event.request);
-
-        const fetchPromise = fetch(event.request).then(async (networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const cache = await caches.open(CACHE_NAME);
-            cache.put(event.request, networkResponse.clone());
-          }
-          return networkResponse;
-        }).catch(() => {
-          console.log('Сеть недоступна для фонового обновления');
-        });
-
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-
-        return await fetchPromise;
-      })()
-    );
+    event.respondWith(staleWhileRevalidate(event.request));
     return;
   }
 
-  // =========================================================
-  // 3. ДЛЯ ВСЕХ ОСТАЛЬНЫХ РЕСУРСОВ: стратегия Cache First
-  // =========================================================
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
+  // Остальные ресурсы: Cache First
+  event.respondWith(cacheFirst(event.request));
+});
 
-      return fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseToCache = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
-          }
-          return networkResponse;
-        })
-        .catch(() => {
-          if (event.request.destination === 'image') {
-            return new Response('Изображение недоступно офлайн', {
-              status: 200,
-              headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-            });
-          }
-          return new Response('Офлайн: ресурс недоступен', {
-            status: 200,
-            headers: { 'Content-Type': 'text/plain; charset=utf-8' }
-          });
-        });
-    })
+// =========================================================
+// Push API (Практика 16)
+// =========================================================
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    if (event.data) {
+      data = JSON.parse(event.data.text());
+    }
+  } catch (error) {
+    console.error('[SW] Push parse error:', error);
+  }
+
+  const title = data.title || '📋 Планировщик задач';
+  const options = {
+    body: data.body || 'У вас есть обновления в списке задач!',
+    icon: '/assets/icons/favicon-192x192.png',
+    badge: '/assets/icons/favicon-96x96.png',
+    data: {
+      url: data.url || '/'
+    },
+    vibrate: [200, 100, 200]
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification?.data?.url || '/';
+
+  event.waitUntil(
+    (async () => {
+      const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of allClients) {
+        if (client.url.includes(url) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow(url);
+      }
+    })()
   );
 });
